@@ -1,8 +1,14 @@
 const { Sequelize } = require('sequelize');
 
-const sequelize = new Sequelize('ker_db', 'postgres', 'KerBddProject', {
-  host: 'localhost',
-  dialect: 'postgres', // Le dialecte pour PostgreSQL
+const sequelize = new Sequelize(process.env.DATABASE_URL, {
+  dialect: 'postgres',
+  protocol: 'postgres',
+  dialectOptions: {
+    ssl: {
+      require: true,
+      rejectUnauthorized: false, // nécessaire pour certaines configurations de Render
+    },
+  } // Le dialecte pour PostgreSQL
 });
 
 module.exports = sequelize;
