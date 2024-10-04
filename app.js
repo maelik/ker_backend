@@ -8,15 +8,9 @@ const eventRoutes = require('./routes/eventRoutes');
 const guestRoutes = require('./routes/guestRoutes');
 
 const app = express();
-// Configurer CORS pour autoriser localhost
-const corsOptions = {
-  origin: 'http://localhost:5173', // Remplace le port si nécessaire
-  methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
-  credentials: true,
-};
 
 // Utiliser le middleware CORS avec la configuration
-app.use(cors(corsOptions));
+app.use(cors());
 
 app.use(express.json());
 
