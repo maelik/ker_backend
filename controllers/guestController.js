@@ -1,121 +1,139 @@
-// /controllers/invitationController.js
-const { Invitation, Guest, EventDate, GuestResponse } = require('../models');
 
+const { Guest, Invitation, GuestResponse, EventDate } = require('../models'); // Assurez-vous d'importer les bons modèles
+const { Sequelize } = require('sequelize'); // Pour les transactions
 
 exports.respondToInvitation = async (req, res) => {
+  const transaction = await Sequelize.transaction(); // Démarrer une transaction
   try {
-    const { token,  eventId } = req.params;
+    const { token, eventId } = req.params;
     const { responses, accepted, guestName } = req.body;
 
+    // Vérification de l'existence de l'invité
     const guest = await Guest.findOne({ where: { token } });
     if (!guest) return res.status(404).json({ error: 'Guest not found' });
 
+    // Vérification de l'invitation liée à cet invité et cet événement
     const invitation = await Invitation.findOne({
-        where: 
-        { 
-          eventId: eventId,
-          guestId : guest.id,
-        } 
-      });
+      where: { 
+        eventId,
+        guestId: guest.id 
+      },
+      transaction
+    });
     if (!invitation) return res.status(404).json({ error: 'Invitation not found' });
 
+    // Mise à jour des informations de l'invitation
     invitation.guestName = guestName;
     invitation.accepted = accepted;
-
-    await invitation.save();
-    const invitationId = invitation.id;
+    await invitation.save({ transaction });
     
+    const invitationId = invitation.id;
+
+    // Traitement des réponses pour chaque date
     for (const response of responses) {
-      const { eventDateId, responseValue } = response;  // responseValue est un booléen (accepté ou refusé)
+      const { eventDateId, responseValue } = response;
+
       const existingResponse = await GuestResponse.findOne({
         where: {
-          invitationId: invitationId,
-          eventDateId: eventDateId
-        }
+          invitationId,
+          eventDateId
+        },
+        transaction
       });
+
       if (existingResponse) {
         // Mise à jour de la réponse existante
-        await existingResponse.update({
-          response: responseValue
-        });
-      } else {        
-        // Vérifier si la date existe
+        await existingResponse.update({ response: responseValue }, { transaction });
+      } else {
+        // Vérification de l'existence de la date d'événement
         const eventDate = await EventDate.findOne({
           where: {
             id: eventDateId,
-            eventId: eventId  // S'assurer que la date appartient à cet événement
-          }
+            eventId
+          },
+          transaction
         });
         if (!eventDate) {
           return res.status(404).json({ message: `Event date with ID ${eventDateId} not found for this event` });
         }
         // Création d'une nouvelle réponse
         await GuestResponse.create({
-          invitationId: invitationId,
-          eventDateId: eventDateId,
+          invitationId,
+          eventDateId,
           response: responseValue
-        });
-      }    
-    }
-    const eventDates = await EventDate.findAll({
-      where: {
-        eventId: eventId
+        }, { transaction });
       }
+    }
+
+    // Mise à jour des votes pour chaque date de l'événement
+    const eventDates = await EventDate.findAll({
+      where: { eventId },
+      transaction
     });
 
     for (const date of eventDates) {
-      const response = await GuestResponse.findAll({
+      const positiveResponses = await GuestResponse.count({
         where: {
           eventDateId: date.id,
-          response: true  // S'assurer que la date appartient à cet événement
-        }
+          response: true
+        },
+        transaction
       });
-      await date.update({
-        vote: response.length,
-      });
+
+      await date.update({ vote: positiveResponses }, { transaction });
     }
 
+    // Valider la transaction après toutes les opérations
+    await transaction.commit();
 
     res.status(200).json(invitation);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    // Rollback en cas d'erreur
+    await transaction.rollback();
+    console.error('Error during invitation response:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
 
 exports.getResponses = async (req, res) => {
   try {
-    const { token,  eventId } = req.params;
+    const { token, eventId } = req.params;
+
+    // Vérification de l'existence de l'invité
     const guest = await Guest.findOne({ where: { token } });
     if (!guest) return res.status(404).json({ error: 'Guest not found' });
 
-    //const guestId = guest.id;
-
+    // Vérification de l'invitation liée à cet invité et cet événement
     const invitation = await Invitation.findOne({
-        where: 
-        { 
-          eventId: eventId,
-          guestId : guest.id,
-        },
-        attributes: ['guestName','accepted'],        
-        include: [
-          {
-            model: GuestResponse, // Récupérer les réponses des invités
-            attributes: ['response'], // Récupérer la réponse (boolean)
-            include: [
-              {
-                model: EventDate, // Inclure les dates proposées
-                attributes: ['proposed_date'],
-              },
-            ],
-          },
-        ],
-      });
-    if (!invitation){
-      return res.status(404).json({ error: 'Invitation not found' });
-    }
-    res.status(201).json(invitation);
-  } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: 'Server error' });
+      where: { 
+        eventId,
+        guestId: guest.id
+      },
+      attributes: ['guestName', 'accepted'],  // Sélectionner seulement les champs nécessaires
+      include: [
+        {
+          model: GuestResponse, // Inclure les réponses des invités
+          attributes: ['response'],  // Inclure seulement la réponse
+          include: [
+            {
+              model: EventDate, // Inclure les dates proposées
+              attributes: ['proposed_date'],  // Récupérer la date proposée
+            }
+          ]
+        }
+      ]
+    });
+
+    // Vérifier l'existence de l'invitation
+    if (!invitation) return res.status(404).json({ error: 'Invitation not found' });
+
+    // Retourner les détails de l'invitation avec les réponses et les dates
+    res.status(200).json(invitation);
+
+  } catch (error) {
+    // En cas d'erreur, loguer l'erreur et retourner un message d'erreur serveur
+    console.error('Error fetching responses:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
-}
+};
+

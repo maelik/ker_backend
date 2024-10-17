@@ -13,6 +13,9 @@ const Discussion = db.define('Discussion', {
     writorType: {
         type: DataTypes.STRING,
         allowNull: false,
+        validate: {
+            notEmpty: true  // Assurer que ce champ n'est pas vide
+        }
     }
 }, {
     timestamps: true,

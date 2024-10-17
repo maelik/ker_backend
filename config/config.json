@@ -1,0 +1,23 @@
+{
+  "development": {
+    "username": "postgres",
+    "password": "KerBddProject",
+    "database": "ker_db",
+    "host": "127.0.0.1",
+    "dialect": "postgres"
+  },
+  "test": {
+    "username": "postgres",
+    "password": "KerBddProject",
+    "database": "ker_db_test",
+    "host": "127.0.0.1",
+    "dialect": "postgres"
+  },
+  "production": {
+    "username": "postgres.urzmaqfvtxhsqrtwzcrk",
+    "password": "7cLUkHWR9lMo89P4",
+    "database": "ker_bdd",
+    "host": "aws-0-eu-west-3.pooler.supabase.com",
+    "dialect": "postgres"
+  }
+}

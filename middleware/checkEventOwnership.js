@@ -5,7 +5,11 @@ const { Event, User } = require('../models');  // Importer les modèles nécessa
 // Middleware pour vérifier si l'utilisateur est le créateur de l'événement
 module.exports = async (req, res, next) => {
     
-  const { eventId, userToken } = req.params;  // Récupérer l'ID de l'événement et l'ID unique de l'utilisateur depuis les paramètres de la requête
+  const { eventId, userToken } = req.params;
+
+  if (!eventId || !userToken) {
+    return res.status(400).json({ error: 'Missing eventId or userToken' });
+  }
 
   try {
     // Chercher l'événement dans la base de données

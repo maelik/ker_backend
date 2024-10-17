@@ -7,8 +7,8 @@ exports.createUser = async (req, res) => {
     const { email } = req.body;
 
     // Vérification que l'email
-    if (!email) {
-      return res.status(400).json({ error: 'Email are required' });
+    if (typeof email !== 'string' || email.trim() === '') {
+      return res.status(400).json({ error: 'Email must be a valid string' });
     }
     
     let user = await User.findOne({
@@ -26,6 +26,7 @@ exports.createUser = async (req, res) => {
 
     res.status(201).json(user);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Error during user creation:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };

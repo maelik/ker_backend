@@ -5,9 +5,14 @@ const { fn, col, Transaction } = require('sequelize');
 const { log } = require('console');
 
 exports.createEvent = async (req, res) => {
+  const transaction = await sequelize.transaction();
+
   try {
     const { title, description, userName, location, userId, dates } = req.body;
-    console.log(userName);
+
+    if (!title || !userName || !userId || !Array.isArray(dates) || dates.length === 0) {
+      return res.status(400).json({ message: 'All fields are required and dates must be an array.' });
+    }
     
     // Création de l'événement
     const event = await Event.create({
@@ -16,7 +21,7 @@ exports.createEvent = async (req, res) => {
       userName,
       location,
       userId
-    });
+    }, { transaction });
 
     const eventId = event.id;
     
@@ -26,7 +31,9 @@ exports.createEvent = async (req, res) => {
       proposed_date: date.proposed_date
     }));
 
-    await EventDate.bulkCreate(eventDates);
+    await EventDate.bulkCreate(eventDates, { transaction });
+
+    await transaction.commit();
     
     const inviteLink = `/events/${eventId}/invite`;
     res.status(201).json({ 
@@ -34,6 +41,7 @@ exports.createEvent = async (req, res) => {
       'inviteLink': inviteLink
     });
   } catch (error) {
+    await transaction.rollback();
     console.error('Error creating event with dates:', error);
     res.status(500).json({ message: 'Server error' });
   }
@@ -42,22 +50,26 @@ exports.createEvent = async (req, res) => {
 exports.connexionLinkInvitation = async (req, res) => {
   const { email } = req.body;
   const { eventId } = req.params;
+
+  const transaction = await sequelize.transaction();
   
   try {
     // Trouver l'événement associé
-    const event = await Event.findByPk(eventId);
+    const event = await Event.findByPk(eventId, {transaction});
 
     if (!event) {
       return res.status(404).json({ message: 'Event not found' });
     }
 
     // Vérification si l'invité existe déjà
-    let guest = await Guest.findOne({ where: { email } });
+    let guest = await Guest.findOne({ where: { email },  transaction });
+
 
     if (!guest) {
         // Création d'un nouvel invité avec un ID unique
         const token = crypto.randomBytes(16).toString('hex');
-        guest = await Guest.create({ email, eventId, token });
+        guest = await Guest.create({ email, eventId, token },  { transaction });
+
     }
 
     // Vérification si l'invitation existe déjà
@@ -65,7 +77,8 @@ exports.connexionLinkInvitation = async (req, res) => {
       where: { 
         guestId : guest.id,
         eventId: eventId
-      }
+      },
+      transaction
     });
 
     if (!invitation) {
@@ -73,8 +86,11 @@ exports.connexionLinkInvitation = async (req, res) => {
       invitation = await Invitation.create({
         eventId: eventId,
         guestId: guest.id,
-      });
-  }
+      },  { transaction });
+
+    }
+
+    await transaction.commit();
 
     res.status(201).json({
       'guest' : guest,
@@ -82,6 +98,7 @@ exports.connexionLinkInvitation = async (req, res) => {
     });
 
   } catch (error) {
+    await transaction.rollback();
     console.error('Error handling invitation:', error);
     res.status(500).json({ message: 'Failed to handle invitation' });
   }
@@ -92,40 +109,21 @@ exports.getListEvents = async (req, res) => {
       const { email } = req.params;
 
       const creator = await User.findOne({ where: { email } });
-      let userToken = '';
-      let eventsCreated = [];
-      if (creator) {
-        const creatorId = creator.id;
-        userToken =  creator.token;
-        eventsCreated = await Event.findAll({ 
-          where: { 
-            userId : creatorId,
-          } ,
-          attributes: ['id', 'title'],
-        });
-      }
+      const userToken = creator ? creator.token : '';
+      const eventsCreated = creator ? await Event.findAll({
+        where: { userId: creator.id },
+        attributes: ['id', 'title'],
+      }) : [];
 
       const guest = await Guest.findOne({ where: { email } });
-      let guestToken = '';
-      let eventsInvited = [];
-      if (guest) {
-        const guestId = guest.id;
-        guestToken = guest.token;
-        const tabInvitations = await Invitation.findAll(
-          {
-            where :{
-              guestId : guestId
-            },
-            include: [
-              {
-                model: Event,
-                attributes: ['id', 'title'],
-              },
-            ]
-          }
-        );
-        eventsInvited = tabInvitations.map(invitation => invitation.Event);
-      }
+      const guestToken = guest ? guest.token : '';
+      const eventsInvited = guest ? await Invitation.findAll({
+        where: { guestId: guest.id },
+        include: [{
+          model: Event,
+          attributes: ['id', 'title'],
+        }],
+      }).then(tabInvitations => tabInvitations.map(invitation => invitation.Event)) : [];
 
       res.status(201).json({
         'eventsCreated' : eventsCreated,
@@ -140,8 +138,9 @@ exports.getListEvents = async (req, res) => {
 };
 
 exports.getInfoEvent = async (req, res) => {
+  const { eventId, token } = req.params;
+
   try {
-    const { eventId, token } = req.params;
     const event = await Event.findOne({
       where : {
         id : eventId
@@ -160,13 +159,11 @@ exports.getInfoEvent = async (req, res) => {
     if (!event) {
       return res.status(404).json({ message: 'Event not found' });
     }
-    
-    // Si le token est présent, vérifier s'il correspond à celui du créateur    
-    if (token && token === event.User.token) {
-      return res.status(200).json({ event, view: 'user' });
-    } else {
-      return res.status(200).json({ event, view: 'guest' });
-    }
+
+    const view = token && token === event.User.token ? 'user' : 'guest';
+
+    res.status(200).json({ event, view });
+
   } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'Server error' });
@@ -174,25 +171,24 @@ exports.getInfoEvent = async (req, res) => {
 }
 
 exports.getEventParticipantsAndResponses = async (req, res)  => {
+  const { eventId }= req.params;
+  
   try {
-    const { eventId }= req.params;
-    const canCome = [];
-    const cannotCome = [];
     const event = await Event.findByPk(eventId, {
       include: [
         {
           model: Invitation,
-          attributes: ['guestName', 'accepted'], // Récupérer le nom du guest
+          attributes: ['guestName', 'accepted'],
           include: [
             {
-              model: GuestResponse, // Récupérer les réponses des invités
+              model: GuestResponse,
               include: [
                 {
-                  model: EventDate, // Inclure les dates proposées
+                  model: EventDate,
                   attributes: ['proposed_date'],
                 },
               ],
-              attributes: ['response'], // Récupérer la réponse (boolean)
+              attributes: ['response'],
             },
           ],
         },
@@ -202,75 +198,99 @@ exports.getEventParticipantsAndResponses = async (req, res)  => {
     if (!event) {
       return res.status(404).json({ message: 'Event not found' });
     }
-    
-    for (const participant of event.Invitations) {
-      if (participant.accepted == true) {
-        canCome.push(participant);
-      } else if (participant.accepted == false) {
-        cannotCome.push(participant);
-      }
-      
-    }
 
-    res.status(201).json({
-      'canCome': canCome,
-      'cannotCome': cannotCome,
+    const canCome = event.Invitations.filter(participant => participant.accepted === true);
+    const cannotCome = event.Invitations.filter(participant => participant.accepted === false);
+
+    res.status(200).json({
+      canCome,
+      cannotCome,
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Error fetching event participants:', error);
+    res.status(500).json({ message: 'Server error' });
   }
 };
 
 exports.getListParticipants = async (req, res)  => {
+  const { eventId }= req.params;
+
   try {
-    const { eventId }= req.params;
-    const listParticipants = [];
     const event = await Event.findByPk(eventId, {
       include: [
         {
           model: Invitation,
-          where : {
-            accepted : true,
-          },
+          where: { accepted: true },
           attributes: ['guestName', 'guestId'],
         },
         {
           model: User,
-          attributes: ['id'],
-        }
+          attributes: ['id'], // Ajout de userName pour l'inclusion
+        },
       ],
+      attributes: ['userName'],
     });
 
     if (!event) {
       return res.status(404).json({ message: 'Event not found' });
     }
+    console.log(event);
+    
+    const listParticipants = [
+      {
+        name: event.userName,
+        id: event.User.id,
+        type: 'user',
+      },
+      ...event.Invitations.map(participant => ({
+        name: participant.guestName,
+        id: participant.guestId,
+        type: 'guest',
+      })),
+    ];
 
-    listParticipants.push({
-        'name' : event.userName,
-        'id' : event.userId,
-        'type' : 'user',
-      });
-   
-    for (const participant of event.Invitations) {
-      listParticipants.push({
-        'name' : participant.guestName,
-        'id' : participant.guestId,
-        'type' : 'guest',
-      });
-    }
-
-    res.status(201).json({
-      'listParticipants': listParticipants,
-    });
+    res.status(200).json({ listParticipants });
   } catch (error) {
+    console.error('Error fetching participants:', error);
     res.status(500).json({ error: error.message });
   }
 };
 
+function validateEventData(data) {
+  const { title, userName, description, location, eventDates } = data;
+
+  // Vérifier que le titre est une chaîne de caractères et non vide
+  if (typeof title !== 'string' || title.trim() === '') {
+    return 'Title is required and must be a non-empty string.';
+  }
+
+  // Vérifier que le nom de l'utilisateur est une chaîne de caractères et non vide
+  if (typeof userName !== 'string' || userName.trim() === '') {
+    return 'User name is required and must be a non-empty string.';
+  }
+
+  // Vérifier que la description est une chaîne de caractères
+  if (description && typeof description !== 'string') {
+    return 'Description must be a string.';
+  }
+
+  // Vérifier que l'emplacement est une chaîne de caractères
+  if (location && typeof location !== 'string') {
+    return 'Location must be a string.';
+  }
+
+  // Si toutes les validations passent, retourner null
+  return null;
+}
 
 exports.updateEvent = async (req, res) => {
   const { eventId } = req.params;
-  const { title, userName, description, location, eventDates } = req.body;
+  const { title, userName, description, location } = req.body;
+
+  const validationError = validateEventData(req.body);
+  if (validationError) {
+    return res.status(400).json({ message: validationError });
+  }
 
   try {
     // Trouver l'événement à mettre à jour
@@ -281,10 +301,7 @@ exports.updateEvent = async (req, res) => {
     }
 
     // Mettre à jour l'événement avec les nouvelles données
-    event.title = title;
-    event.description = description;
-    event.userName = userName;
-    event.location = location;
+    Object.assign(event, { title, userName, description, location });
 
     // Sauvegarder les modifications
     await event.save();
@@ -292,15 +309,16 @@ exports.updateEvent = async (req, res) => {
     //foreach le tableau des dates
     //regarder si elle existe
     //si non ajouter la date
-
-    for (let date of eventDates) {
+    
+    // en commentaire pour l'instant car ajouter une date ou la supprimer oblige aux invités de révoter
+    /* for (let date of eventDates) {
       const existingDate = await EventDate.findOne({
         where: { eventId: eventId, proposed_date: date.proposed_date }
       });
       if (!existingDate) {
         await EventDate.create({ eventId: eventId, proposed_date: date.proposed_date, vote: date.vote });
       }
-    }
+    } */
 
     res.status(200).json({ message: 'Event updated successfully', event });
   } catch (error) {
@@ -309,14 +327,41 @@ exports.updateEvent = async (req, res) => {
   }
 };
 
+function validateExpenseData({ amount, description, date, participants }) {
+  if (!amount || isNaN(amount) || amount <= 0) {
+    return 'Amount must be a valid positive number.';
+  }
+
+  if (!description || typeof description !== 'string' || description.trim() === '') {
+    return 'Description is required and must be a non-empty string.';
+  }
+
+  if (!date || isNaN(Date.parse(date))) {
+    return 'Date is required and must be a valid date.';
+  }
+
+  if (!participants || !Array.isArray(participants) || participants.length === 0) {
+    return 'Participants must be a non-empty array.';
+  }
+
+  for (const participant of participants) {
+    if (!participant.id || !participant.type || !['user', 'guest'].includes(participant.type)) {
+      return 'Each participant must have a valid id and type (either "user" or "guest").';
+    }
+  }
+
+  return null;
+}
+
 exports.createExpense = async (req, res) => {
   const { eventId, token } = req.params;
   const { amount, description, date, distribution, participants } = req.body;
   
 
-  // Validation de base des données reçues
-  if (!amount || !description || !date || !participants || !Array.isArray(participants)) {
-    return res.status(400).json({ message: 'Missing required fields or invalid data' });
+  // Validation des données
+  const validationError = validateExpenseData({ amount, description, date, participants });
+  if (validationError) {
+    return res.status(400).json({ message: validationError });
   }
 
   // Commencer une transaction
@@ -324,9 +369,11 @@ exports.createExpense = async (req, res) => {
 
   try {
     // Trouver l'événement
-    const event = await Event.findByPk(eventId);
+    const event = await Event.findByPk(eventId,  { transaction });
+
 
     if (!event) {
+      await transaction.rollback();
       return res.status(404).json({ message: 'Event not found' });
     }
 
@@ -335,17 +382,13 @@ exports.createExpense = async (req, res) => {
                         await Guest.findOne({ where: { token }, transaction });
 
     if (!userOrGuest) {
+      await transaction.rollback();
       return res.status(400).json({ message: 'Invalid token: payer not found' });
     }
 
     // Définir payerType et payerId selon l'entité trouvée
     const payerType = userOrGuest instanceof User ? 'user' : 'guest';
-    const payerId = userOrGuest.id;
-
-    console.log(userOrGuest);
-    console.log(payerType);
-    console.log(payerId);
-    
+    const payerId = userOrGuest.id;    
 
     // Créer la dépense
     const expense = await Expense.create({
@@ -358,15 +401,16 @@ exports.createExpense = async (req, res) => {
       distribution
     }, { transaction });
 
-    // Associer les participants à la dépense
-    for (const participant of participants) {
-      await ExpenseParticipant.create({
-        expenseId: expense.id,
-        participantId: participant.id,
-        participantType: participant.type,
-        shareValue : amount / participants.length
-      }, { transaction });
-    }
+    // Préparer les données pour les participants
+    const expenseParticipants = participants.map(participant => ({
+      expenseId: expense.id,
+      participantId: participant.id,
+      participantType: participant.type,
+      shareValue: amount / participants.length,
+    }));
+
+    // Insérer les participants en une seule requête
+    await ExpenseParticipant.bulkCreate(expenseParticipants, { transaction });
 
     // Valider la transaction
     await transaction.commit();
@@ -409,11 +453,16 @@ const getTabPayParticipant = async (eventId) => {
     ],
   });
 
+  if (!event) {
+    return { error: 'Event not found' };
+  }
+
   const listParticipants = [
     {
       type: 'user',
       id: event.User.id,
       name: event.userName,
+      pay: 0,
     },
   ];
 
@@ -422,50 +471,52 @@ const getTabPayParticipant = async (eventId) => {
       type: 'guest',
       id: invitation.Guest.id,
       name: invitation.guestName,
+      pay: 0,
     };
     listParticipants.push(guest);
   }
 
-  // 2 - Pour chaque participant, récupérer ses dépenses (en tant que payeur ou participant)
-  for (const participant of listParticipants) {
-    let totalExpenses = 0;
-
-    // Récupérer les dépenses où le participant est le payeur
-    const expensesAsPayer = await Expense.findAll({
-      where: {
-        payerId: participant.id,
-        payerType: participant.type,
-        eventId: eventId,
+  const expensesAsPayers = await Expense.findAll({
+    where: { eventId },
+    include: [
+      {
+        model: ExpenseParticipant,
+        attributes: ['participantId', 'participantType', 'shareValue'],
       },
-    });
-    
-    // Ajouter le montant total des dépenses qu'il a payées
-    for (const expense of expensesAsPayer) {
-      totalExpenses += expense.amount;
+    ]
+  });
+
+  // Mapper les dépenses des payeurs et des participants
+  const participantExpenseMap = new Map();
+
+  for (const expense of expensesAsPayers) {
+    const payerId = `${expense.payerId}-${expense.payerType}`;
+    // Ajouter le montant payé par le payeur
+    if (!participantExpenseMap.has(payerId)) {
+      participantExpenseMap.set(payerId, expense.amount);
+    } else {
+      participantExpenseMap.set(payerId, participantExpenseMap.get(payerId) + expense.amount);
     }
 
-    // Récupérer les dépenses où le participant est inclus
-    const expensesAsParticipant = await ExpenseParticipant.findAll({
-      where: {
-        participantId: participant.id,
-        participantType: participant.type,
-      },
-      include: [
-        {
-          model: Expense,
-          where: { eventId: eventId },
-        },
-      ],
-    });
-    
-    // Ajouter la part qu'il doit payer dans chaque dépense
-    for (const participantExpense of expensesAsParticipant) {
-      totalExpenses -= participantExpense.shareValue; // La part du participant est soustraite
+    // Ajouter la part des participants pour cette dépense
+    for (const participant of expense.ExpenseParticipants) {
+      const participantKey = `${participant.participantId}-${participant.participantType}`;
+      if (!participantExpenseMap.has(participantKey)) {
+        participantExpenseMap.set(participantKey, -participant.shareValue);
+      } else {
+        participantExpenseMap.set(participantKey, participantExpenseMap.get(participantKey) - participant.shareValue);
+      }
     }
-    
-    // 3 - Ajouter le solde du participant dans le tableau
-    participant.pay = totalExpenses;
   }
+
+  // 3 - Mettre à jour la balance (pay) de chaque participant dans listParticipants
+  for (const participant of listParticipants) {
+    const key = `${participant.id}-${participant.type}`;
+    if (participantExpenseMap.has(key)) {
+      participant.pay = participantExpenseMap.get(key);
+    }
+  }
+  
   return listParticipants;
 };
 
@@ -479,7 +530,8 @@ const generateTransactions = async (tabPayParticipant, eventId) => {
     await Balancing.destroy({
       where: {
         eventId: eventId
-      }
+      },
+      transaction
     });
 
     for (const participant of tabPayParticipant) {
@@ -498,6 +550,9 @@ const generateTransactions = async (tabPayParticipant, eventId) => {
   
     let i = 0;
     let j = 0;
+
+    // Liste des transactions à effectuer en une seule opération
+    const transactionsToCreate = [];
   
     while (i < tabCreditor.length && j < tabDebtor.length) {
       let creditor = tabCreditor[i];
@@ -505,32 +560,42 @@ const generateTransactions = async (tabPayParticipant, eventId) => {
   
       let transactionAmount = Math.min(creditor.pay, Math.abs(debtor.pay));
   
-      // Effectuer la transaction
-      await Balancing.create({
-        'amount' : transactionAmount,
-        'senderType' : debtor.type,
-        'receiverType' : creditor.type,
-        'senderName' : debtor.name,
-        'receiverName' : creditor.name,
-        eventId,
-        'senderId' : debtor.id,
-        'receiverId' : creditor.id,
-      }, { transaction });
-      
-      console.log(`Debtor ${debtor.name} paie ${transactionAmount} à Creditor ${creditor.name}`);
-  
-      // Mettre à jour les valeurs de pay
-      creditor.pay -= transactionAmount;
-      debtor.pay += transactionAmount; // On ajoute car debtor.pay est négatif
-  
-      // Passer au prochain creditor ou debtor si leur pay atteint 0
+      // Vérification supplémentaire pour s'assurer que le montant est correct
+      if (transactionAmount > 0) {
+        // Créer la transaction
+        transactionsToCreate.push({
+          amount: transactionAmount,
+          senderType: debtor.type,
+          receiverType: creditor.type,
+          senderName: debtor.name,
+          receiverName: creditor.name,
+          eventId: eventId,
+          senderId: debtor.id,
+          receiverId: creditor.id,
+        });
+
+        // Mettre à jour les montants
+        creditor.pay -= transactionAmount;
+        debtor.pay += transactionAmount; // Le débiteur a un pay négatif, donc on ajoute pour revenir à 0
+
+        console.log(`Debtor ${debtor.name} paie ${transactionAmount} à Creditor ${creditor.name}`);
+      }
+
+      // Passer au prochain créancier si son montant atteint 0
       if (creditor.pay === 0) {
         i++;
       }
+      // Passer au prochain débiteur si son montant atteint 0
       if (debtor.pay === 0) {
         j++;
       }
     }
+
+    // Insérer toutes les transactions en une seule fois
+    if (transactionsToCreate.length > 0) {
+      await Balancing.bulkCreate(transactionsToCreate, { transaction });
+    }
+
 
     // Valider la transaction
     await transaction.commit();
@@ -551,33 +616,38 @@ exports.getListExpenses = async (req, res) => {
       where: { eventId },
     });
 
-    const detailedExpenses = await Promise.all(expenses.map(async (expense) => {
-      let payerName = null;
+    // Récupérer tous les users et guests en une seule requête
+    const users = await User.findAll({
+      include: [{
+        model: Event,
+        where: { id: eventId },
+        attributes: ['userName'],
+      }],
+    });
 
-      // Vérifier le type de payeur et récupérer les informations correspondantes
-      if (expense.payerType === 'user') {
-        const user = await User.findByPk(expense.payerId, {
-          include: [
-            {
-              model: Event,
-              where: { id: eventId },
-              attributes: ['userName'],
-            }
-          ]
-        });
-        payerName = user ? user.Events[0].userName : null;
-      } else if (expense.payerType === 'guest') {
-        const guest = await Guest.findByPk(expense.payerId, {
-          include: [
-            {
-              model: Invitation,
-              where: { eventId: eventId },
-              attributes: ['guestName'],
-            },
-          ],
-        });        
-        payerName = guest ? guest.Invitation.guestName : null;
-      }
+    const guests = await Guest.findAll({
+      include: [{
+        model: Invitation,
+        where: { eventId: eventId },
+        attributes: ['guestName'],
+      }],
+    });
+
+    // Créer un dictionnaire pour accéder rapidement aux payeurs par leur ID et type
+    const payerMap = {};
+
+    users.forEach(user => {
+      payerMap[`user-${user.id}`] = user.Events[0].userName;
+    });
+
+    guests.forEach(guest => {
+      payerMap[`guest-${guest.id}`] = guest.Invitation.guestName;
+    });
+
+    // Construire la liste détaillée des dépenses
+    const detailedExpenses = expenses.map(expense => {
+      const payerKey = `${expense.payerType}-${expense.payerId}`;
+      const payerName = payerMap[payerKey] || null;
 
       return {
         id: expense.id,
@@ -587,7 +657,7 @@ exports.getListExpenses = async (req, res) => {
         payerName: payerName,
         payerType: expense.payerType,
       };
-    }));
+    });
 
     // Envoyer la réponse
     res.status(200).json({ expenses: detailedExpenses });
@@ -597,35 +667,53 @@ exports.getListExpenses = async (req, res) => {
   }
 };
 
+
 exports.favoriteDate = async (req, res) => {
   const { eventId } = req.params;
 
   try {
-    const maxVote = await EventDate.findOne({
-      where: {
-        eventId: eventId
-      },
-      attributes:[[fn('MAX', col('vote')), 'maxVote']]
-    });
-    
-    const eventDate = await EventDate.findAll({
+    // Récupérer la/les date(s) avec le maximum de votes
+    const favoriteDates = await EventDate.findAll({
       where: {
         eventId: eventId,
-        vote: maxVote.get('maxVote')
+      },
+      order: [[ 'vote', 'DESC' ]], // Trie les résultats pour avoir les dates avec le plus de votes en premier
+      limit: 1, // On ne récupère que la date avec le maximum de votes
+    });
+
+    // Vérifier s'il y a des résultats
+    if (favoriteDates.length === 0) {
+      return res.status(404).json({ message: 'No event dates found' });
+    }
+
+    // Récupérer la valeur du vote maximum
+    const maxVote = favoriteDates[0].vote;
+
+    // Obtenir toutes les dates qui ont le même nombre de votes maximum (s'il y en a plusieurs)
+    const eventDatesWithMaxVotes = await EventDate.findAll({
+      where: {
+        eventId: eventId,
+        vote: maxVote,
       },
     });
-    
-    res.status(200).json({ eventDate });
+
+    res.status(200).json({ eventDate: eventDatesWithMaxVotes });
   } catch (error) {
     console.error('Server error:', error);
     res.status(500).json({ message: 'Server error' });
   }
 };
 
+
 exports.getBalancing = async (req, res) => {
   const { eventId } = req.params;
 
   try {
+
+    if (!eventId) {
+      return res.status(400).json({ message: 'Missing eventId parameter' });
+    }
+
     const balancing = await Balancing.findAll({
       where: {
         eventId: eventId
@@ -643,6 +731,11 @@ exports.getPayParticipant = async (req, res) => {
   const { eventId } = req.params;
 
   try {
+
+    if (!eventId) {
+      return res.status(400).json({ message: 'Missing eventId parameter' });
+    }
+
     const tabPayParticipant = await getTabPayParticipant(eventId);
     
     res.status(200).json({ tabPayParticipant });
@@ -654,9 +747,13 @@ exports.getPayParticipant = async (req, res) => {
 
 exports.getInfoExpense = async (req, res) => {
   const { eventId, expenseId } = req.params;
-  let payerName = null;
 
   try {
+
+    if (!eventId || !expenseId) {
+      return res.status(400).json({ message: 'Missing eventId or expenseId parameter' });
+    }
+
     const expense = await Expense.findOne({
       where: { 
         eventId, 
@@ -668,6 +765,12 @@ exports.getInfoExpense = async (req, res) => {
         }
       ]
     });
+
+    if (!expense) {
+      return res.status(404).json({ message: 'Expense not found' });
+    }
+
+    let payerName = null;
 
     if (expense.payerType === 'user') {
       const user = await User.findByPk(expense.payerId, {
@@ -724,7 +827,7 @@ exports.getInfoExpense = async (req, res) => {
     
     res.status(200).json({ expense });
   } catch (error) {
-    console.error('Server error:', error);
+    console.error('Failed to retrieve expense details:', error);
     res.status(500).json({ message: 'Server error' });
   }
 };
@@ -836,7 +939,7 @@ exports.createPost = async (req, res) => {
   const { topic } = req.body;
 
   // Validation de base des données reçues
-  if (!topic) {
+  if (!eventId || !token || !topic || typeof topic !== 'string') {
     return res.status(400).json({ message: 'Missing required fields or invalid data' });
   }
 
@@ -880,7 +983,7 @@ exports.createDiscussion = async (req, res) => {
   const { messageText } = req.body;
 
   // Validation de base des données reçues
-  if (!messageText) {
+  if (!eventId || postId || !token || !messageText || typeof messageText !== 'string') {
     return res.status(400).json({ message: 'Missing required fields or invalid data' });
   }
 
@@ -923,17 +1026,17 @@ exports.createDiscussion = async (req, res) => {
 exports.getListPost = async (req, res) => {
   const { eventId } = req.params;
 
+  if (!eventId) {
+    return res.status(400).json({ message: 'Missing required parameter: eventId' });
+  }
+
   try {
+    // Récupérer les posts associés à l'événement
     const listPost = await Post.findAll({
-      where: { 
-        eventId 
-      },
+      where: { eventId },
     });
 
-    
-
-    for (const post of listPost) {
-      
+    const detailedPosts = await Promise.all(listPost.map(async (post) => {
       let creatorName = null;
 
       if (post.creatorType === 'user') {
@@ -952,34 +1055,45 @@ exports.getListPost = async (req, res) => {
           include: [
             {
               model: Invitation,
-              where: { eventId: eventId },
+              where: { eventId },
               attributes: ['guestName'],
             },
           ],
-        });     
+        });
         creatorName = guest ? guest.Invitation.guestName : null;
       }
-      post.dataValues.creatorName = creatorName;
-    }
-    
-    res.status(200).json({ listPost });
+
+      // Ajouter le nom du créateur au post
+      return {
+        ...post.dataValues,
+        creatorName,
+      };
+    }));
+
+    // Répondre avec la liste détaillée des posts
+    res.status(200).json({ listPost: detailedPosts });
   } catch (error) {
     console.error('Server error:', error);
     res.status(500).json({ message: 'Server error' });
   }
 };
 
+
 exports.getListDiscussion = async (req, res) => {
   const { eventId, postId } = req.params;
 
-  try {
-    const listDiscussion = await Discussion.findAll({
-      where: {
-        postId 
-      }
-    });    
+  if (!eventId || !postId) {
+    return res.status(400).json({ message: 'Missing required parameters: eventId and postId' });
+  }
 
-    for (const discussion of listDiscussion) {
+  try {
+    // Récupérer la liste des discussions pour le post
+    const listDiscussion = await Discussion.findAll({
+      where: { postId },
+    });
+
+    // Récupérer les noms des rédacteurs en parallèle
+    const detailedDiscussions = await Promise.all(listDiscussion.map(async (discussion) => {
       let writorName = null;
 
       if (discussion.writorType === 'user') {
@@ -992,24 +1106,31 @@ exports.getListDiscussion = async (req, res) => {
             },
           ],
         });
-        
         writorName = user ? user.Events[0].userName : null;
       } else if (discussion.writorType === 'guest') {
         const guest = await Guest.findByPk(discussion.writorId, {
           include: [
             {
               model: Invitation,
-              where: { eventId: eventId },
+              where: { eventId },
               attributes: ['guestName'],
             },
           ],
-        });        
+        });
         writorName = guest ? guest.Invitation.guestName : null;
       }
-      discussion.dataValues.writorName = writorName;
-    }
 
+      // Ajouter le nom du rédacteur à la discussion
+      return {
+        ...discussion.dataValues,
+        writorName,
+      };
+    }));
+
+    // Récupérer le post et son créateur
     const post = await Post.findByPk(postId);
+    let creatorName = null;
+
     if (post.creatorType === 'user') {
       const user = await User.findByPk(post.creatorId, {
         include: [
@@ -1026,19 +1147,20 @@ exports.getListDiscussion = async (req, res) => {
         include: [
           {
             model: Invitation,
-            where: { eventId: eventId },
+            where: { eventId },
             attributes: ['guestName'],
           },
         ],
-      });     
+      });
       creatorName = guest ? guest.Invitation.guestName : null;
     }
+
     post.dataValues.creatorName = creatorName;
 
-    
+    // Répondre avec le post et la liste des discussions
     res.status(200).json({
-      'post' : post,
-      'listDiscussion' : listDiscussion, 
+      post,
+      listDiscussion: detailedDiscussions,
     });
   } catch (error) {
     console.error('Server error:', error);

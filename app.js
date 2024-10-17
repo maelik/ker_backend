@@ -15,7 +15,7 @@ app.use(cors());
 app.use(express.json());
 
 // Middleware pour vérifier l'ID utilisateur dans l'URL
-app.use('api/users/:token/*', async (req, res, next) => {
+app.use('/api/users/:token/*', async (req, res, next) => {
     const token = req.params.token;
     
     try {
