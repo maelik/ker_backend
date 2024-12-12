@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const { sequelize } = require('../models');
 const { fn, col, Transaction } = require('sequelize');
 const { log } = require('console');
+const WebSocket = require('ws');
 
 exports.createEvent = async (req, res) => {
   const transaction = await sequelize.transaction();
@@ -56,7 +57,7 @@ exports.connexionLinkInvitation = async (req, res) => {
   try {
     // Trouver l'événement associé
     const event = await Event.findByPk(eventId, {transaction});
-
+    
     if (!event) {
       return res.status(404).json({ message: 'Event not found' });
     }
@@ -89,7 +90,6 @@ exports.connexionLinkInvitation = async (req, res) => {
       },  { transaction });
 
     }
-
     await transaction.commit();
 
     res.status(201).json({
@@ -141,7 +141,7 @@ exports.getInfoEvent = async (req, res) => {
   const { eventId, token } = req.params;
 
   try {
-    const event = await Event.findOne({
+    let event = await Event.findOne({
       where : {
         id : eventId
       },
@@ -159,6 +159,17 @@ exports.getInfoEvent = async (req, res) => {
     if (!event) {
       return res.status(404).json({ message: 'Event not found' });
     }
+
+    event = event.toJSON(); // Convertir Sequelize à un objet simple
+    event.EventDates.forEach((date) => {
+      if (date.proposed_date) {
+        date.proposed_date = new Intl.DateTimeFormat('fr-FR', {
+          day: '2-digit',
+          month: 'long',
+          year: 'numeric',
+        }).format(new Date(date.proposed_date));
+      }
+    });
 
     const view = token && token === event.User.token ? 'user' : 'guest';
 
@@ -234,7 +245,6 @@ exports.getListParticipants = async (req, res)  => {
     if (!event) {
       return res.status(404).json({ message: 'Event not found' });
     }
-    console.log(event);
     
     const listParticipants = [
       {
@@ -327,7 +337,7 @@ exports.updateEvent = async (req, res) => {
   }
 };
 
-function validateExpenseData({ amount, description, date, participants }) {
+function validateExpenseData({ amount, description, date, payerId, payerType, participants }) {
   if (!amount || isNaN(amount) || amount <= 0) {
     return 'Amount must be a valid positive number.';
   }
@@ -335,9 +345,17 @@ function validateExpenseData({ amount, description, date, participants }) {
   if (!description || typeof description !== 'string' || description.trim() === '') {
     return 'Description is required and must be a non-empty string.';
   }
-
+  
   if (!date || isNaN(Date.parse(date))) {
     return 'Date is required and must be a valid date.';
+  }
+  
+  if (!payerId || isNaN(payerId)) {
+    return 'PayerId is required.';
+  }
+
+  if (!payerType || typeof payerType !== 'string' || payerType.trim() === '') {
+    return 'PayerType is required and must be a non-empty string.';
   }
 
   if (!participants || !Array.isArray(participants) || participants.length === 0) {
@@ -354,12 +372,12 @@ function validateExpenseData({ amount, description, date, participants }) {
 }
 
 exports.createExpense = async (req, res) => {
-  const { eventId, token } = req.params;
-  const { amount, description, date, distribution, participants } = req.body;
+  const { eventId } = req.params;
+  const { amount, description, date, payerId, payerType, distribution, participants } = req.body;
   
 
   // Validation des données
-  const validationError = validateExpenseData({ amount, description, date, participants });
+  const validationError = validateExpenseData({ amount, description, date, payerId, payerType, participants });
   if (validationError) {
     return res.status(400).json({ message: validationError });
   }
@@ -375,20 +393,7 @@ exports.createExpense = async (req, res) => {
     if (!event) {
       await transaction.rollback();
       return res.status(404).json({ message: 'Event not found' });
-    }
-
-    // Trouver le User ou Guest associé au token
-    const userOrGuest = await User.findOne({ where: { token }, transaction }) ||
-                        await Guest.findOne({ where: { token }, transaction });
-
-    if (!userOrGuest) {
-      await transaction.rollback();
-      return res.status(400).json({ message: 'Invalid token: payer not found' });
-    }
-
-    // Définir payerType et payerId selon l'entité trouvée
-    const payerType = userOrGuest instanceof User ? 'user' : 'guest';
-    const payerId = userOrGuest.id;    
+    } 
 
     // Créer la dépense
     const expense = await Expense.create({
@@ -443,6 +448,7 @@ const getTabPayParticipant = async (eventId) => {
       {
         model: Invitation,
         attributes: ['guestName'],
+        where: { accepted: true },
         include: [
           {
             model: Guest,
@@ -513,7 +519,7 @@ const getTabPayParticipant = async (eventId) => {
   for (const participant of listParticipants) {
     const key = `${participant.id}-${participant.type}`;
     if (participantExpenseMap.has(key)) {
-      participant.pay = participantExpenseMap.get(key);
+      participant.pay = Math.round(participantExpenseMap.get(key) * 100) / 100;      
     }
   }
   
@@ -714,13 +720,17 @@ exports.getBalancing = async (req, res) => {
       return res.status(400).json({ message: 'Missing eventId parameter' });
     }
 
-    const balancing = await Balancing.findAll({
+    const listBalancing = await Balancing.findAll({
       where: {
         eventId: eventId
       },
     });
-    
-    res.status(200).json({ balancing });
+
+    for (const balancing of listBalancing) { 
+      balancing.amount = Math.round(balancing.amount * 100) / 100;
+    }
+
+    res.status(200).json({ listBalancing });
   } catch (error) {
     console.error('Server error:', error);
     res.status(500).json({ message: 'Server error' });
@@ -969,7 +979,21 @@ exports.createPost = async (req, res) => {
       creatorType,
       eventId,
       creatorId
-    });    
+    });
+
+     // Diffuser le nouveau post via WebSocket
+     if (global.wss) {
+      global.wss.clients.forEach((client) => {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(
+            JSON.stringify({
+              type: 'NEW_POST',
+              data: post,
+            })
+          );
+        }
+      });
+    }
 
     res.status(200).json({ message: 'Post created successfully', post });
   } catch (error) {
@@ -982,8 +1006,8 @@ exports.createDiscussion = async (req, res) => {
   const { eventId, token, postId } = req.params;
   const { messageText } = req.body;
 
-  // Validation de base des données reçues
-  if (!eventId || postId || !token || !messageText || typeof messageText !== 'string') {
+  // Validation de base des données reçues  
+  if (!eventId || !postId || !token || !messageText || typeof messageText !== 'string') {
     return res.status(400).json({ message: 'Missing required fields or invalid data' });
   }
 
@@ -1014,7 +1038,27 @@ exports.createDiscussion = async (req, res) => {
       postId,
       eventId,
       writorId
-    });    
+    }); 
+
+    const discussionCount = await Discussion.count({
+      where: { postId } // Compte les messages liés à ce post
+    });
+    
+     // Diffuser le nouveau post via WebSocket
+     if (global.wss) {
+      global.wss.clients.forEach((client) => {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(
+            JSON.stringify({
+              type: 'NEW_DISCUSSION',
+              data: discussion,
+              postId,
+              discussionCount,
+            })
+          );
+        }
+      });
+    }
 
     res.status(200).json({ message: 'Discussion created successfully', discussion });
   } catch (error) {
@@ -1034,6 +1078,18 @@ exports.getListPost = async (req, res) => {
     // Récupérer les posts associés à l'événement
     const listPost = await Post.findAll({
       where: { eventId },
+      attributes: {
+        include: [
+          [fn('COUNT', col('Discussions.id')), 'discussionCount'], // Ajout du compteur
+        ],
+      },
+      include: [
+        {
+          model: Discussion,
+          attributes: [], // Exclure les colonnes de Discussion dans les résultats (si non nécessaires)
+        },
+      ],
+      group: ['Post.id'], // Nécessaire pour éviter les doublons et regrouper par Post
     });
 
     const detailedPosts = await Promise.all(listPost.map(async (post) => {

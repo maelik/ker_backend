@@ -9,11 +9,8 @@ const Invitation = db.define('Invitation', {
     },
     guestName: {
         type: DataTypes.STRING,
-        allowNull: false,  // Assurer que le nom de l'invité est requis
+        allowNull: true,
         validate: {
-          notEmpty: {
-            msg: 'Guest name cannot be empty',  // Message d'erreur personnalisé
-          },
           len: {
             args: [1, 255],  // Limite de longueur pour le nom
             msg: 'Guest name must be between 1 and 255 characters',

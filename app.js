@@ -6,8 +6,39 @@ const { sequelize } = require('./models');
 const userRoutes = require('./routes/userRoutes');
 const eventRoutes = require('./routes/eventRoutes');
 const guestRoutes = require('./routes/guestRoutes');
+const http = require('http');
+const WebSocket = require('ws');
 
 const app = express();
+
+// Crée un serveur HTTP
+const server = http.createServer(app);
+
+// Crée un serveur WebSocket
+const wss = new WebSocket.Server({ server });
+
+// Stocke le serveur WebSocket globalement (accessible dans les contrôleurs)
+global.wss = wss;
+
+// Gère les connexions WebSocket
+wss.on('connection', (ws) => {
+  console.log('Client WebSocket connecté');
+
+  ws.on('message', (message) => {
+    console.log('Message reçu:', message);
+    
+    // Exemple : envoyez un message à tous les clients connectés
+    wss.clients.forEach((client) => {
+      if (client !== ws && client.readyState === WebSocket.OPEN) {
+        client.send(message); // Diffuser le message à tous les autres clients
+      }
+    });
+  });
+
+  ws.on('close', () => {
+    console.log('Client WebSocket déconnecté');
+  });
+});
 
 // Utiliser le middleware CORS avec la configuration
 app.use(cors());
@@ -48,6 +79,6 @@ const PORT = process.env.PORT || 3000;
 // Synchroniser les modèles
 sequelize.sync({ alter: true })
     .then(() => {
-        app.listen(PORT, console.log(`Server running on port ${PORT}`));
+        server.listen(PORT, console.log(`Server running on port ${PORT}`));
     })
     .catch(err => console.log('Error: ' + err));

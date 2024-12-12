@@ -5,7 +5,7 @@ const checkEventOwnership = require('../middleware/checkEventOwnership');
 
 router.post('/createEvent', eventController.createEvent);
 router.post('/:eventId/invite', eventController.connexionLinkInvitation);
-router.post('/:eventId/tricount/:token/createExpense', eventController.createExpense);
+router.post('/:eventId/tricount/createExpense', eventController.createExpense);
 router.post('/:eventId/messaging/:token/createPost', eventController.createPost);
 router.post('/:eventId/messaging/:token/post/:postId/createDiscussion', eventController.createDiscussion);
 

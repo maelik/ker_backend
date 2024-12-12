@@ -1,9 +1,9 @@
 
 const { Guest, Invitation, GuestResponse, EventDate } = require('../models'); // Assurez-vous d'importer les bons modèles
-const { Sequelize } = require('sequelize'); // Pour les transactions
+const { sequelize } = require('../models');
 
 exports.respondToInvitation = async (req, res) => {
-  const transaction = await Sequelize.transaction(); // Démarrer une transaction
+  const transaction = await sequelize.transaction(); // Démarrer une transaction
   try {
     const { token, eventId } = req.params;
     const { responses, accepted, guestName } = req.body;
@@ -127,8 +127,20 @@ exports.getResponses = async (req, res) => {
     // Vérifier l'existence de l'invitation
     if (!invitation) return res.status(404).json({ error: 'Invitation not found' });
 
+    // Transformer les dates dans les réponses
+    const transformedInvitation = invitation.toJSON(); // Convertir Sequelize à un objet simple
+    transformedInvitation.GuestResponses.forEach((response) => {
+      if (response.EventDate && response.EventDate.proposed_date) {
+        response.EventDate.proposed_date = new Intl.DateTimeFormat('fr-FR', {
+          day: '2-digit',
+          month: 'long',
+          year: 'numeric',
+        }).format(new Date(response.EventDate.proposed_date));
+      }
+    });    
+
     // Retourner les détails de l'invitation avec les réponses et les dates
-    res.status(200).json(invitation);
+    res.status(200).json(transformedInvitation);
 
   } catch (error) {
     // En cas d'erreur, loguer l'erreur et retourner un message d'erreur serveur

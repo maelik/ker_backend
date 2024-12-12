@@ -8,10 +8,10 @@ const Balancing = db.define('Balancing', {
         autoIncrement: true
     },
     amount: {
-        type: DataTypes.FLOAT,
+        type: DataTypes.DECIMAL,
         allowNull: false,
         validate: {
-          isFloat: true,
+            type: Sequelize.DECIMAL(10, 2),
           min: 0,  // Assurer que le montant est toujours positif
         }
     },
