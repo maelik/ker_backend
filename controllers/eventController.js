@@ -126,7 +126,7 @@ exports.getListEvents = async (req, res) => {
       }).then(tabInvitations => tabInvitations.map(invitation => invitation.Event)) : [];
 
       res.status(201).json({
-        'test' : 'test',
+        'test' : 'test2',
         'eventsCreated' : eventsCreated,
         'userToken' : userToken,
         'eventsInvited': eventsInvited,
