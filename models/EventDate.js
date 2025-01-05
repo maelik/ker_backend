@@ -19,16 +19,16 @@ const EventDate = sequelize.define('EventDate', {
       }
     }
   },
-  vote: {
+  score: {
     type: DataTypes.INTEGER,
     defaultValue: 0,
     validate: {
       isInt: {
-        msg: 'Vote must be an integer.'
+        msg: 'Score must be an integer.'
       },
       min: {
         args: [0],
-        msg: 'Vote count cannot be negative.'
+        msg: 'Score count cannot be negative.'
       }
     }
   }
@@ -36,7 +36,7 @@ const EventDate = sequelize.define('EventDate', {
   timestamps: false,
   indexes: [
     { fields: ['proposed_date'] },
-    { fields: ['vote'] }
+    { fields: ['score'] }
   ]
 });
 

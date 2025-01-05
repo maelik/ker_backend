@@ -199,7 +199,7 @@ exports.getEventParticipantsAndResponses = async (req, res)  => {
                   attributes: ['proposed_date'],
                 },
               ],
-              attributes: ['response'],
+              attributes: ['response', 'order'],
             },
           ],
         },
@@ -210,6 +210,12 @@ exports.getEventParticipantsAndResponses = async (req, res)  => {
       return res.status(404).json({ message: 'Event not found' });
     }
 
+    // Tri manuel des GuestResponses
+    event.Invitations.forEach(invitation => {
+      invitation.GuestResponses.sort((a, b) => a.order - b.order);
+    });
+
+    
     const canCome = event.Invitations.filter(participant => participant.accepted === true);
     const cannotCome = event.Invitations.filter(participant => participant.accepted === false);
 
@@ -326,7 +332,7 @@ exports.updateEvent = async (req, res) => {
         where: { eventId: eventId, proposed_date: date.proposed_date }
       });
       if (!existingDate) {
-        await EventDate.create({ eventId: eventId, proposed_date: date.proposed_date, vote: date.vote });
+        await EventDate.create({ eventId: eventId, proposed_date: date.proposed_date, score: date.score });
       }
     } */
 
@@ -678,13 +684,13 @@ exports.favoriteDate = async (req, res) => {
   const { eventId } = req.params;
 
   try {
-    // Récupérer la/les date(s) avec le maximum de votes
+    // Récupérer la/les date(s) avec le maximum de score
     const favoriteDates = await EventDate.findAll({
       where: {
         eventId: eventId,
       },
-      order: [[ 'vote', 'DESC' ]], // Trie les résultats pour avoir les dates avec le plus de votes en premier
-      limit: 1, // On ne récupère que la date avec le maximum de votes
+      order: [[ 'score', 'DESC' ]], // Trie les résultats pour avoir les dates avec le plus de score en premier
+      limit: 1, // On ne récupère que la date avec le maximum de score
     });
 
     // Vérifier s'il y a des résultats
@@ -692,18 +698,18 @@ exports.favoriteDate = async (req, res) => {
       return res.status(404).json({ message: 'No event dates found' });
     }
 
-    // Récupérer la valeur du vote maximum
-    const maxVote = favoriteDates[0].vote;
+    // Récupérer la valeur du score maximum
+    const maxScore = favoriteDates[0].score;
 
-    // Obtenir toutes les dates qui ont le même nombre de votes maximum (s'il y en a plusieurs)
-    const eventDatesWithMaxVotes = await EventDate.findAll({
+    // Obtenir toutes les dates qui ont le même nombre de score maximum (s'il y en a plusieurs)
+    const eventDatesWithMaxScore = await EventDate.findAll({
       where: {
         eventId: eventId,
-        vote: maxVote,
+        score: maxScore,
       },
     });
 
-    res.status(200).json({ eventDate: eventDatesWithMaxVotes });
+    res.status(200).json({ eventDate: eventDatesWithMaxScore });
   } catch (error) {
     console.error('Server error:', error);
     res.status(500).json({ message: 'Server error' });

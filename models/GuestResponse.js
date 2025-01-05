@@ -18,6 +18,15 @@ const GuestResponse = sequelize.define('GuestResponse', {
       },
     },
   },
+  order: {
+    type: DataTypes.INTEGER,
+    defaultValue: null,
+    validate: {
+      isInt: {
+        msg: 'Score must be an integer.'
+      }
+    }
+  }
 }, {
   timestamps: false,
   indexes: [

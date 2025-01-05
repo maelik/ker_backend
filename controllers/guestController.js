@@ -6,9 +6,9 @@ exports.respondToInvitation = async (req, res) => {
   const transaction = await sequelize.transaction(); // Démarrer une transaction
   try {
     const { token, eventId } = req.params;
-    const { responses, accepted, guestName } = req.body;
+    const { responses, accepted, guestName } = req.body;    
 
-    // Vérification de l'existence de l'invité
+    // Vérification de l'existence de l'invité    
     const guest = await Guest.findOne({ where: { token } });
     if (!guest) return res.status(404).json({ error: 'Guest not found' });
 
@@ -31,7 +31,7 @@ exports.respondToInvitation = async (req, res) => {
 
     // Traitement des réponses pour chaque date
     for (const response of responses) {
-      const { eventDateId, responseValue } = response;
+      const { eventDateId, responseValue, order } = response;
 
       const existingResponse = await GuestResponse.findOne({
         where: {
@@ -43,7 +43,7 @@ exports.respondToInvitation = async (req, res) => {
 
       if (existingResponse) {
         // Mise à jour de la réponse existante
-        await existingResponse.update({ response: responseValue }, { transaction });
+        await existingResponse.update({ response: responseValue, order:  order }, { transaction });
       } else {
         // Vérification de l'existence de la date d'événement
         const eventDate = await EventDate.findOne({
@@ -60,31 +60,46 @@ exports.respondToInvitation = async (req, res) => {
         await GuestResponse.create({
           invitationId,
           eventDateId,
-          response: responseValue
+          response: responseValue,
+          order: order
         }, { transaction });
       }
     }
 
-    // Mise à jour des votes pour chaque date de l'événement
+    // Mise à jour des scores pour chaque date de l'événement
     const eventDates = await EventDate.findAll({
       where: { eventId },
       transaction
     });
 
     for (const date of eventDates) {
-      const positiveResponses = await GuestResponse.count({
-        where: {
+      // Récupérer toutes les réponses pour cette date avec leur `response` et `order`
+      const responses = await GuestResponse.findAll({
+        where: { 
           eventDateId: date.id,
-          response: true
         },
+        include: [{
+          model: Invitation,
+          where: { accepted: true }
+        }],
+        attributes: ['response', 'order'],
         transaction
       });
-
-      await date.update({ vote: positiveResponses }, { transaction });
+    
+      // Calculer le score en cumulant les poids pour chaque réponse
+      const totalDates = eventDates.length; // Nombre total de dates
+      const score = responses.reduce((acc, res) => {
+        const orderWeight = totalDates - res.order + 1; // Poids basé sur l'ordre        
+        const responseValue = res.response ? 2 : 0; // 2 pour les réponses positives, 0 sinon
+        return acc + responseValue + orderWeight; // Ajouter au score total
+      }, 0);
+    
+      // Mettre à jour le score de la date
+      await date.update({ score: parseInt(score) }, { transaction });
     }
 
     // Valider la transaction après toutes les opérations
-    await transaction.commit();
+    await transaction.commit();    
 
     res.status(200).json(invitation);
   } catch (error) {
@@ -113,7 +128,7 @@ exports.getResponses = async (req, res) => {
       include: [
         {
           model: GuestResponse, // Inclure les réponses des invités
-          attributes: ['response'],  // Inclure seulement la réponse
+          attributes: ['response', 'order'],  // Inclure seulement la réponse
           include: [
             {
               model: EventDate, // Inclure les dates proposées
@@ -121,7 +136,10 @@ exports.getResponses = async (req, res) => {
             }
           ]
         }
-      ]
+      ],
+      order: [
+        [{ model: GuestResponse }, 'order', 'ASC'], // Ordre croissant par la colonne `order` de GuestResponse
+      ],
     });
 
     // Vérifier l'existence de l'invitation
