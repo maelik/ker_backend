@@ -464,9 +464,8 @@ const getTabPayParticipant = async (eventId) => {
       },
     ],
   });
-
   if (!event) {
-    return { error: 'Event not found' };
+    return { message: 'Pas de participant pour cet événement' };
   }
 
   const listParticipants = [
@@ -751,7 +750,7 @@ exports.getPayParticipant = async (req, res) => {
     if (!eventId) {
       return res.status(400).json({ message: 'Missing eventId parameter' });
     }
-
+    
     const tabPayParticipant = await getTabPayParticipant(eventId);
     
     res.status(200).json({ tabPayParticipant });
