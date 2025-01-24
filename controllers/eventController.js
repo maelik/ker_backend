@@ -1,7 +1,7 @@
 const { Event, EventDate, User, Guest, Invitation, GuestResponse, Expense, ExpenseParticipant, Balancing, Post, Discussion } = require('../models');
 const crypto = require('crypto');
 const { sequelize } = require('../models');
-const { fn, col, Transaction } = require('sequelize');
+const { fn, col, Transaction, Op } = require('sequelize');
 const { log } = require('console');
 const WebSocket = require('ws');
 
@@ -687,6 +687,9 @@ exports.favoriteDate = async (req, res) => {
     const favoriteDates = await EventDate.findAll({
       where: {
         eventId: eventId,
+        score: {
+          [Op.gt]: 0, // Vérifie que le score est strictement supérieur à 0
+        }
       },
       order: [[ 'score', 'DESC' ]], // Trie les résultats pour avoir les dates avec le plus de score en premier
       limit: 1, // On ne récupère que la date avec le maximum de score
@@ -694,7 +697,7 @@ exports.favoriteDate = async (req, res) => {
 
     // Vérifier s'il y a des résultats
     if (favoriteDates.length === 0) {
-      return res.status(404).json({ message: 'No event dates found' });
+      return res.status(200).json({ message: 'Aucune date favorite pour le moment' });
     }
 
     // Récupérer la valeur du score maximum
