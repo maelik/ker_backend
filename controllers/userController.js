@@ -30,3 +30,14 @@ exports.createUser = async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 };
+
+exports.listUser = async (req, res) => {
+  try {
+    
+    let users = await User.findAll();
+
+    res.status(201).json(users);
+  } catch (error) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
